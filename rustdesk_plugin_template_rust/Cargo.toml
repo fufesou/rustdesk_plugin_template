@@ -1,0 +1,21 @@
+[package]
+name = "plugin_template"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "plugin_template"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[workspace]
+members = ["libs/plugin_common", "libs/plugin_base"]
+
+[dependencies]
+plugin_base = { path = "libs/plugin_base" }
+plugin_common = { path = "libs/plugin_common" }
+serde = "1.0"
+
+[dev-dependencies]
+dlopen = "0.1"
