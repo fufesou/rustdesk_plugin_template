@@ -1,16 +1,17 @@
 use super::desc;
 use plugin_base::{
+    cstr_to_string,
     desc::{Desc, CONFIG_VALUE_FALSE, CONFIG_VALUE_TRUE},
-    early_return_value,
+    early_return_if_true, early_return_value,
     errno::*,
     handler::*,
 };
 use plugin_common::{
-    log,
+    libc, log,
     serde_derive::{Deserialize, Serialize},
-    serde_json,
+    serde_json, ResultType,
 };
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 
 const MSG_PEER_METHOD_TURN_ON: &str = "on";
 const MSG_PEER_METHOD_TURN_OFF: &str = "off";
@@ -25,6 +26,52 @@ pub(crate) struct PluginPeerMsg {
 impl PluginPeerMsg {
     pub(crate) fn new_string(f1: String) -> String {
         serde_json::to_string(&PluginPeerMsg { f1 }).unwrap()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MsgPeer {
+    pub id: String,
+    pub name: String,
+    pub method: String,
+    pub content: String,
+}
+
+impl MsgPeer {
+    #[inline]
+    pub fn new_string(d: &Desc, method: String, content: String) -> String {
+        let mut s = serde_json::to_string(&MsgPeer {
+            id: d.id.clone(),
+            name: d.name.clone(),
+            method,
+            content,
+        })
+        .unwrap();
+        // Add trailing 0 to make it a C string in this case
+        s.push('\0');
+        s
+    }
+
+    #[inline]
+    pub fn fill_out(
+        d: &Desc,
+        method: String,
+        content: String,
+        out: *mut *mut c_void,
+        out_len: *mut usize,
+    ) {
+        let s = Self::new_string(d, method, content);
+        let b = s.as_bytes();
+        unsafe {
+            *out = libc::malloc(b.len());
+            libc::memcpy(*out, b.as_ptr() as _, b.len());
+            *out_len = b.len();
+        }
+    }
+
+    #[inline]
+    pub fn from_c_str(msg: *const c_char) -> ResultType<Self> {
+        Ok(serde_json::from_str(&cstr_to_string(msg)?)?)
     }
 }
 
@@ -85,10 +132,24 @@ impl Handler for HandlerTemplate {
     fn handle_client_event(
         &self,
         d: &Desc,
-        msg_peer: MsgPeer,
+        args: *const c_void,
+        _len: usize,
         out: *mut *mut c_void,
         out_len: *mut usize,
     ) -> HandlerRet {
+        let msg_peer = early_return_value!(
+            MsgPeer::from_c_str(args as _),
+            ERR_CALL_INVALID_ARGS,
+            "parse args"
+        );
+
+        early_return_if_true!(
+            msg_peer.id != d.id,
+            ERR_PEER_ID_MISMATCH,
+            "Id mismatch {}",
+            msg_peer.id
+        );
+
         let mut ret = HandlerRet::default();
         match &msg_peer.method as &str {
             MSG_PEER_METHOD_TURN_ON => {
@@ -141,7 +202,20 @@ impl Handler for HandlerTemplate {
         ret
     }
 
-    fn handle_server_event(&self, d: &Desc, msg_peer: MsgPeer) -> HandlerRet {
+    fn handle_server_event(&self, d: &Desc, args: *const c_void, _len: usize) -> HandlerRet {
+        let msg_peer = early_return_value!(
+            MsgPeer::from_c_str(args as _),
+            ERR_CALL_INVALID_ARGS,
+            "parse args"
+        );
+
+        early_return_if_true!(
+            msg_peer.id != d.id,
+            ERR_PEER_ID_MISMATCH,
+            "Id mismatch {}",
+            msg_peer.id
+        );
+
         let mut ret = HandlerRet::default();
         match &msg_peer.method as &str {
             MSG_PEER_METHOD_NOTIFY_TURN_ON => {

@@ -1,10 +1,9 @@
-use crate::{cstr_to_string, desc::Desc, errno::*};
+use crate::{desc::Desc, errno::*};
 use plugin_common::{
-    libc,
     serde_derive::{Deserialize, Serialize},
-    serde_json, ResultType,
+    serde_json,
 };
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 
 pub const MSG_TO_UI_FLUTTER_CHANNEL_MAIN: u16 = 0x01 << 0;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -40,6 +39,19 @@ macro_rules! early_return_value {
                 };
             }
             Ok(v) => v,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! early_return_if_true {
+    ($e:expr, $code: ident, $($arg:tt)*) => {
+        if $e {
+            return $crate::handler::HandlerRet {
+                code: $code,
+                msg: format_args!($($arg)*).to_string(),
+                msgs: $crate::handler::Msgs::default(),
+            };
         }
     };
 }
@@ -140,52 +152,6 @@ pub struct MsgFromUi {
     pub action: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct MsgPeer {
-    pub id: String,
-    pub name: String,
-    pub method: String,
-    pub content: String,
-}
-
-impl MsgPeer {
-    #[inline]
-    pub fn new_string(d: &Desc, method: String, content: String) -> String {
-        let mut s = serde_json::to_string(&MsgPeer {
-            id: d.id.clone(),
-            name: d.name.clone(),
-            method,
-            content,
-        })
-        .unwrap();
-        // Add trailing 0 to make it a C string in this case
-        s.push('\0');
-        s
-    }
-
-    #[inline]
-    pub fn fill_out(
-        d: &Desc,
-        method: String,
-        content: String,
-        out: *mut *mut c_void,
-        out_len: *mut usize,
-    ) {
-        let s = Self::new_string(d, method, content);
-        let b = s.as_bytes();
-        unsafe {
-            *out = libc::malloc(b.len());
-            libc::memcpy(*out, b.as_ptr() as _, b.len());
-            *out_len = b.len();
-        }
-    }
-
-    #[inline]
-    pub fn from_c_str(msg: *const c_char) -> ResultType<Self> {
-        Ok(serde_json::from_str(&cstr_to_string(msg)?)?)
-    }
-}
-
 static mut PLUGIN_HANDLER: Option<Box<dyn Handler>> = None;
 
 pub trait Handler {
@@ -193,11 +159,12 @@ pub trait Handler {
     fn handle_client_event(
         &self,
         d: &Desc,
-        msg_peer: MsgPeer,
+        args: *const c_void,
+        len: usize,
         out: *mut *mut c_void,
         out_len: *mut usize,
     ) -> HandlerRet;
-    fn handle_server_event(&self, d: &Desc, msg_peer: MsgPeer) -> HandlerRet;
+    fn handle_server_event(&self, d: &Desc, args: *const c_void, len: usize) -> HandlerRet;
 }
 
 pub fn set_handler(handler: Box<dyn Handler>) {

@@ -5,7 +5,7 @@ mod desc;
 #[cfg(test)]
 mod tests {
     use dlopen::symbor::Library;
-    use plugin_base::{desc::Desc, handler, init::InitData, str_to_cstr_ret, Callbacks};
+    use plugin_base::{desc::Desc, init::InitData, str_to_cstr_ret, Callbacks};
     use plugin_common::{bail, libc, log, serde_json, ResultType};
     use std::ffi::{c_char, c_void, CStr};
 
@@ -195,8 +195,11 @@ mod tests {
         };
         plugin.init(&init_data, &path).unwrap();
         let args_content = crate::call::PluginPeerMsg::new_string("local peer id".to_owned());
-        let mut args =
-            handler::MsgPeer::new_string(&super::desc::get_desc(), "on".to_owned(), args_content);
+        let mut args = super::call::MsgPeer::new_string(
+            &super::desc::get_desc(),
+            "on".to_owned(),
+            args_content,
+        );
         args.push('\0');
         let mut out = std::ptr::null_mut();
         let mut out_len: usize = 0;

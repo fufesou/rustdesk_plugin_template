@@ -1,7 +1,7 @@
 use crate::{
     cstr_to_string,
     desc::{self, get_desc},
-    early_return_value,
+    early_return_if_true, early_return_value,
     errno::*,
     handler::*,
     init::INIT_DATA,
@@ -14,18 +14,6 @@ macro_rules! early_call_return_if_true {
     ($e:expr, $code: ident, $($arg:tt)*) => {
         if $e {
             return make_return_code_msg($code, &format_args!($($arg)*).to_string());
-        }
-    };
-}
-
-macro_rules! early_return_if_true {
-    ($e:expr, $code: ident, $($arg:tt)*) => {
-        if $e {
-            return HandlerRet {
-                code: $code,
-                msg: format_args!($($arg)*).to_string(),
-                msgs: Msgs::default(),
-            };
         }
     };
 }
@@ -168,51 +156,25 @@ fn handle_msg_ui(d: &desc::Desc, args: *const c_void, _len: usize) -> HandlerRet
     (*get_handler().as_ref().unwrap()).handle_ui_event(d, local_peer_id, msg_ui)
 }
 
-fn handle_msg_conn(d: &desc::Desc, args: *const c_void, _len: usize) -> HandlerRet {
-    let msgs = Msgs::default();
-    let msg_peer = early_return_value!(
-        MsgPeer::from_c_str(args as _),
-        ERR_CALL_INVALID_ARGS,
-        "parse args"
-    );
-
-    early_return_if_true!(
-        msg_peer.id != d.id,
-        ERR_PEER_ID_MISMATCH,
-        "Id mismatch {}",
-        msg_peer.id
-    );
+fn handle_msg_conn(_d: &desc::Desc, _args: *const c_void, _len: usize) -> HandlerRet {
     HandlerRet {
         code: ERR_CALL_UNIMPLEMENTED,
         msg: format!("Unimplemented"),
-        msgs,
+        msgs: Default::default(),
     }
 }
 
 fn handle_msg_peer(
     d: &desc::Desc,
     args: *const c_void,
-    _len: usize,
+    len: usize,
     out: *mut *mut c_void,
     out_len: *mut usize,
 ) -> HandlerRet {
-    let msg_peer = early_return_value!(
-        MsgPeer::from_c_str(args as _),
-        ERR_CALL_INVALID_ARGS,
-        "parse args"
-    );
-
-    early_return_if_true!(
-        msg_peer.id != d.id,
-        ERR_PEER_ID_MISMATCH,
-        "Id mismatch {}",
-        msg_peer.id
-    );
-
     if !out.is_null() {
-        (*get_handler().as_ref().unwrap()).handle_client_event(d, msg_peer, out, out_len)
+        (*get_handler().as_ref().unwrap()).handle_client_event(d, args, len, out, out_len)
     } else {
-        (*get_handler().as_ref().unwrap()).handle_server_event(d, msg_peer)
+        (*get_handler().as_ref().unwrap()).handle_server_event(d, args, len)
     }
 }
 
