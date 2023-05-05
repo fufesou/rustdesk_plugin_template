@@ -51,7 +51,7 @@ mod tests {
 
                     $(let $field = match unsafe { lib.symbol::<$tp>(stringify!($field)) } {
                             Ok(m) => {
-                                log::debug!("{} method found {}", path, stringify!($field));
+                                plugin_common::debug!("{} method found {}", path, stringify!($field));
                                 *m
                             },
                             Err(e) => {
@@ -96,7 +96,7 @@ mod tests {
                     if !clear_ret.is_null() {
                         let (code, msg) = get_code_msg_from_ret(clear_ret);
                         free_c_ptr(clear_ret as _);
-                        log::error!(
+                        plugin_common::error!(
                             "Failed to clear plugin {}, code: {}, msg: {}",
                             id,
                             code,
