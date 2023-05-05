@@ -46,39 +46,39 @@ pub fn init(
     handler: Box<dyn handler::Handler>,
     desc: desc::Desc,
     info: *const InitData,
-) -> *const c_void {
+) -> PluginReturn {
     let ret = set_init_data(info);
-    if !ret.is_null() {
+    if !ret.is_success() {
         return ret;
     }
     handler::set_handler(handler);
     desc::set_desc(desc);
     plugin_common::plog::set_log(INIT_DATA.lock().unwrap().as_ref().unwrap().cbs.log);
-    std::ptr::null()
+    PluginReturn::success()
 }
 
-pub fn reset(info: *const InitData) -> *const c_void {
+pub fn reset(info: *const InitData) -> PluginReturn {
     let ret = set_init_data(info);
-    if !ret.is_null() {
+    if !ret.is_success() {
         return ret;
     }
-    std::ptr::null()
+    PluginReturn::success()
 }
 
-pub fn clear() -> *const c_void {
+pub fn clear() -> PluginReturn {
     *INIT_DATA.lock().unwrap() = None;
-    std::ptr::null()
+    PluginReturn::success()
 }
 
-fn set_init_data(info: *const InitData) -> *const c_void {
+fn set_init_data(info: *const InitData) -> PluginReturn {
     unsafe {
         if info.is_null() || (*info).version.is_null() {
-            return make_return_code_msg(
+            return PluginReturn::new(
                 crate::errno::ERR_PLUGIN_MSG_INIT_INVALID,
                 "Invalid InitData, null pointer",
             );
         }
         *INIT_DATA.lock().unwrap() = Some((*info).clone());
     }
-    std::ptr::null()
+    PluginReturn::success()
 }

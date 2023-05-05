@@ -5,7 +5,7 @@ mod desc;
 #[cfg(test)]
 mod tests {
     use dlopen::symbor::Library;
-    use plugin_base::{desc::Desc, init::InitData, str_to_cstr_ret, Callbacks};
+    use plugin_base::{desc::Desc, init::InitData, str_to_cstr_ret, Callbacks, PluginReturn};
     use plugin_common::{bail, libc, log, serde_json, ResultType};
     use std::ffi::{c_char, c_void, CStr};
 
@@ -16,18 +16,6 @@ mod tests {
                 libc::free(ret);
             }
         }
-    }
-
-    #[inline]
-    fn get_code_msg_from_ret(ret: *const c_void) -> (i32, String) {
-        assert!(ret.is_null() == false);
-        let code_bytes = unsafe { std::slice::from_raw_parts(ret as *const u8, 4) };
-        let code = i32::from_le_bytes([code_bytes[0], code_bytes[1], code_bytes[2], code_bytes[3]]);
-        let msg = unsafe { CStr::from_ptr((ret as *const u8).add(4) as _) }
-            .to_str()
-            .unwrap_or("")
-            .to_string();
-        (code, msg)
     }
 
     macro_rules! make_plugin {
@@ -77,10 +65,9 @@ mod tests {
                 }
 
                 fn init(&self, data: &InitData, path: &str) -> ResultType<()> {
-                    let init_ret = (self.init)(data as _);
-                    if !init_ret.is_null() {
-                        let (code, msg) = get_code_msg_from_ret(init_ret);
-                        free_c_ptr(init_ret as _);
+                    let mut init_ret = (self.init)(data as _);
+                    if !init_ret.is_success() {
+                        let (code, msg) = init_ret.get_code_msg();
                         bail!(
                             "Failed to init plugin {}, code: {}, msg: {}",
                             path,
@@ -92,10 +79,9 @@ mod tests {
                 }
 
                 fn clear(&self, id: &str) {
-                    let clear_ret = (self.clear)();
-                    if !clear_ret.is_null() {
-                        let (code, msg) = get_code_msg_from_ret(clear_ret);
-                        free_c_ptr(clear_ret as _);
+                    let mut clear_ret = (self.clear)();
+                    if !clear_ret.is_success() {
+                        let (code, msg) = clear_ret.get_code_msg();
                         plugin_common::error!(
                             "Failed to clear plugin {}, code: {}, msg: {}",
                             id,
@@ -116,9 +102,9 @@ mod tests {
     }
 
     make_plugin!(
-        init: extern "C" fn(*const InitData) -> *const c_void,
-        reset: extern "C" fn() -> *const c_void,
-        clear: extern "C" fn() -> *const c_void,
+        init: extern "C" fn(*const InitData) -> PluginReturn,
+        reset: extern "C" fn() -> PluginReturn,
+        clear: extern "C" fn() -> PluginReturn,
         desc: extern "C" fn() -> *const c_void,
         client_call:
             extern "C" fn(
@@ -126,7 +112,7 @@ mod tests {
                 peer: *const c_char,
                 args: *const c_void,
                 len: usize,
-            ) -> *const c_void,
+            ) -> PluginReturn,
         server_call:
             extern "C" fn(
                 method: *const c_char,
@@ -135,7 +121,7 @@ mod tests {
                 len: usize,
                 out: *mut *mut c_void,
                 out_len: *mut usize,
-            ) -> *const c_void
+            ) -> PluginReturn
     );
 
     #[no_mangle]
@@ -145,9 +131,9 @@ mod tests {
         _id: *const c_char,
         _content: *const c_void,
         _len: usize,
-    ) -> *const c_void {
+    ) -> PluginReturn {
         println!("msg called");
-        std::ptr::null()
+        PluginReturn::success()
     }
 
     #[no_mangle]
@@ -203,7 +189,7 @@ mod tests {
                 get_conf,
                 get_id,
                 log: log_cb,
-                // native,
+                native,
             },
         };
         plugin.init(&init_data, &path).unwrap();
@@ -216,7 +202,7 @@ mod tests {
         args.push('\0');
         let mut out = std::ptr::null_mut();
         let mut out_len: usize = 0;
-        let ret = (plugin.server_call)(
+        let mut ret = (plugin.server_call)(
             "handle_peer\0".as_ptr() as _,
             "remote peer id\0".as_ptr() as _,
             args.as_bytes().as_ptr() as _,
@@ -224,12 +210,11 @@ mod tests {
             &mut out,
             &mut out_len,
         );
-        if ret.is_null() {
+        if ret.is_success() {
             println!("call success");
         } else {
-            let (code, msg) = get_code_msg_from_ret(ret);
+            let (code, msg) = ret.get_code_msg();
             println!("code: {}, msg: {}", code, msg);
-            free_c_ptr(ret as _);
         }
 
         std::thread::sleep(std::time::Duration::from_secs(3));

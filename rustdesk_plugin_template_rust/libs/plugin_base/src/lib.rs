@@ -1,6 +1,8 @@
+use errno::ERR_SUCCESS;
 use plugin_common::{lazy_static::lazy_static, libc, CbLog, ResultType};
 use std::{
     ffi::{c_char, c_int, c_void, CStr},
+    ptr::null,
     sync::{Arc, Mutex},
 };
 
@@ -19,16 +21,13 @@ pub mod init;
 /// content: The content.
 /// len:     The length of the content.
 ///
-/// Return null ptr if success.
-/// Return the error message if failed.  `i32-String` without dash, i32 is a signed little-endian number, the String is utf8 string.
-/// The plugin allocate memory with `libc::malloc` and return the pointer.
 type CbMsg = extern "C" fn(
     peer: *const c_char,
     target: *const c_char,
     id: *const c_char,
     content: *const c_void,
     len: usize,
-) -> *const c_void;
+) -> PluginReturn;
 /// Get local peer id.
 ///
 /// The returned string is utf8 string(null terminated) and must be freed by caller.
@@ -72,7 +71,54 @@ pub struct Callbacks {
     pub get_conf: CbGetConf,
     pub get_id: CbGetId,
     pub log: CbLog,
-    // pub native: CallbackNative,
+    pub native: CallbackNative,
+}
+
+/// Common plugin return.
+///
+/// [Note]
+/// The msg must be nullptr if code is errno::ERR_SUCCESS.
+/// The msg must be freed by caller if code is not errno::ERR_SUCCESS.
+#[repr(C)]
+#[derive(Debug)]
+pub struct PluginReturn {
+    pub code: c_int,
+    pub msg: *const c_char,
+}
+
+impl PluginReturn {
+    pub fn success() -> Self {
+        Self {
+            code: errno::ERR_SUCCESS,
+            msg: null(),
+        }
+    }
+
+    #[inline]
+    pub fn is_success(&self) -> bool {
+        self.code == ERR_SUCCESS
+    }
+
+    pub fn new(code: c_int, msg: &str) -> Self {
+        Self {
+            code,
+            msg: str_to_cstr_ret(msg),
+        }
+    }
+
+    pub fn get_code_msg(&mut self) -> (i32, String) {
+        if self.is_success() {
+            (self.code, "".to_owned())
+        } else {
+            assert!(!self.msg.is_null());
+            let msg = cstr_to_string(self.msg).unwrap_or_default();
+            unsafe {
+                libc::free(self.msg as _);
+            }
+            self.msg = null();
+            (self.code as _, msg)
+        }
+    }
 }
 
 #[inline]
@@ -108,42 +154,5 @@ pub fn str_to_cstr_ret(s: &str) -> *const c_char {
             s.len(),
         );
         r
-    }
-}
-
-#[inline]
-pub fn make_return_code_msg(code: i32, msg: &str) -> *const c_void {
-    let mut out = code.to_le_bytes().to_vec();
-    out.extend(msg.as_bytes());
-    out.push(0);
-    unsafe {
-        let r = libc::malloc(out.len()) as *mut c_char;
-        libc::memcpy(
-            r as *mut libc::c_void,
-            out.as_ptr() as *const libc::c_void,
-            out.len(),
-        );
-        r as *const c_void
-    }
-}
-
-#[inline]
-fn get_code_msg_from_ret(ret: *const c_void) -> (i32, String) {
-    assert!(ret.is_null() == false);
-    let code_bytes = unsafe { std::slice::from_raw_parts(ret as *const u8, 4) };
-    let code = i32::from_le_bytes([code_bytes[0], code_bytes[1], code_bytes[2], code_bytes[3]]);
-    let msg = unsafe { CStr::from_ptr((ret as *const u8).add(4) as _) }
-        .to_str()
-        .unwrap_or("")
-        .to_string();
-    (code, msg)
-}
-
-#[inline]
-fn free_c_ptr(ret: *mut c_void) {
-    if !ret.is_null() {
-        unsafe {
-            libc::free(ret);
-        }
     }
 }

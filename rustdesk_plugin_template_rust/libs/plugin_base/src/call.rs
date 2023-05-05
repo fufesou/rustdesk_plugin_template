@@ -3,21 +3,17 @@ use crate::{
     desc::{self, get_desc},
     early_return_if_true, early_return_value,
     errno::*,
-    free_c_ptr, get_code_msg_from_ret,
     handler::*,
     init::get_init_data,
-    make_return_code_msg,
+    PluginReturn,
 };
 use plugin_common::{libc, serde_json};
-use std::{
-    ffi::{c_char, c_void},
-    ptr::null,
-};
+use std::ffi::{c_char, c_void};
 
 macro_rules! early_call_return_if_true {
     ($e:expr, $code: ident, $($arg:tt)*) => {
         if $e {
-            return make_return_code_msg($code, &format_args!($($arg)*).to_string());
+            return PluginReturn::new($code, &format_args!($($arg)*).to_string());
         }
     };
 }
@@ -27,7 +23,7 @@ fn is_method(method: *const c_char, target: &[u8]) -> bool {
     target == unsafe { std::slice::from_raw_parts(method as *const u8, target.len()) }
 }
 
-fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_void {
+fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> PluginReturn {
     for msg in ret.msgs.to_config.into_iter() {
         let _r = call_msg_cb(
             peer.clone(),
@@ -58,8 +54,8 @@ fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_vo
     }
 
     match ret.code {
-        ERR_SUCCESS => null(),
-        _ => make_return_code_msg(ret.code, &ret.msg),
+        ERR_SUCCESS => PluginReturn::success(),
+        _ => PluginReturn::new(ret.code, &ret.msg),
     }
 }
 
@@ -70,7 +66,7 @@ pub fn plugin_call(
     len: usize,
     out: *mut *mut c_void,
     out_len: *mut usize,
-) -> *const c_void {
+) -> PluginReturn {
     early_call_return_if_true!(
         get_init_data().lock().unwrap().is_none(),
         ERR_PLUGIN_MSG_INIT,
@@ -95,7 +91,7 @@ pub fn plugin_call(
     let peer = match cstr_to_string(peer) {
         Ok(peer) => peer,
         Err(e) => {
-            return make_return_code_msg(
+            return PluginReturn::new(
                 ERR_CALL_INVALID_PEER,
                 &format!("parse remote peer id: {:?}", e),
             )
@@ -215,19 +211,17 @@ pub fn call_msg_cb(
     if let Some(data) = get_init_data().lock().unwrap().as_ref() {
         peer.push('\0');
         id.push('\0');
-        let ret = (data.cbs.msg)(
+        let mut ret = (data.cbs.msg)(
             peer.as_ptr() as _,
             target.as_ptr() as _,
             id.as_ptr() as _,
             content.as_ptr() as _,
             content.len() as _,
         );
-        if ret.is_null() {
+        if ret.is_success() {
             (ERR_SUCCESS, "".to_owned())
         } else {
-            let res = get_code_msg_from_ret(ret);
-            free_c_ptr(ret as _);
-            res
+            ret.get_code_msg()
         }
     } else {
         (ERR_SUCCESS, "".to_owned())
