@@ -9,13 +9,9 @@ edition = "2021"
 name = "plugin_template"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
-[workspace]
-members = ["libs/plugin_common", "libs/plugin_base"]
-
 [dependencies]
-plugin_base = { path = "libs/plugin_base" }
-plugin_common = { path = "libs/plugin_common" }
-serde = "1.0"
+log = "0.4"
+libc = "0.2.141"
 
 [dev-dependencies]
 dlopen = "0.1"
