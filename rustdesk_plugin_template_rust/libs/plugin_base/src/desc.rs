@@ -60,6 +60,7 @@ pub struct Desc {
     pub github: String,
     pub location: Location,
     pub config: Config,
+    pub listen_events: Vec<String>,
 }
 
 static mut DESC: Option<Desc> = None;

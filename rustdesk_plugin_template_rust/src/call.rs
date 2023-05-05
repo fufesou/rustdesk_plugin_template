@@ -5,6 +5,7 @@ use plugin_base::{
     early_return_if_true, early_return_value,
     errno::*,
     handler::*,
+    init::get_init_data,
 };
 use plugin_common::{
     libc, log,
@@ -109,7 +110,6 @@ impl Handler for HandlerTemplate {
                         ret.code = ERR_SUCCESS;
                         ret.msg = "".to_string();
                         ret.msgs.to_config.push(MsgToConfig::new_string(
-                            d.id.clone(),
                             CONFIG_TYPE_SHARED.to_string(),
                             desc::UI_HOST_MAIN_KEY.to_owned(),
                             msg_ui.value,
@@ -226,7 +226,7 @@ impl Handler for HandlerTemplate {
                     ret.msg = "success".to_owned();
                     ret.msgs
                         .to_config
-                        .push(Self::make_msg_to_config(&d.id, CONFIG_VALUE_TRUE));
+                        .push(Self::make_msg_to_config(CONFIG_VALUE_TRUE));
                     ret.msgs.to_ui.push(Self::make_msg_to_msgbox("on"));
                 } else {
                     plugin_common::debug!("Plugin: turn on failed, {}", &msg_peer.content);
@@ -235,7 +235,7 @@ impl Handler for HandlerTemplate {
                     ret.msg = format!("{} {}", "Failed to turn on", msg_peer.content);
                     ret.msgs
                         .to_config
-                        .push(Self::make_msg_to_config(&d.id, CONFIG_VALUE_FALSE));
+                        .push(Self::make_msg_to_config(CONFIG_VALUE_FALSE));
                     ret.msgs
                         .to_ui
                         .push(Self::make_msg_to_msgbox("Failed to turn on"));
@@ -249,7 +249,7 @@ impl Handler for HandlerTemplate {
                     ret.msg = "success".to_owned();
                     ret.msgs
                         .to_config
-                        .push(Self::make_msg_to_config(&d.id, CONFIG_VALUE_FALSE));
+                        .push(Self::make_msg_to_config(CONFIG_VALUE_FALSE));
                     ret.msgs.to_ui.push(Self::make_msg_to_msgbox("off"));
                 } else {
                     plugin_common::debug!("Plugin: turn off failed, {}", &msg_peer.content);
@@ -258,7 +258,7 @@ impl Handler for HandlerTemplate {
                     ret.msg = format!("{} {}", "Failed to turn off", msg_peer.content);
                     ret.msgs
                         .to_config
-                        .push(Self::make_msg_to_config(&d.id, CONFIG_VALUE_TRUE));
+                        .push(Self::make_msg_to_config(CONFIG_VALUE_TRUE));
                     ret.msgs
                         .to_ui
                         .push(Self::make_msg_to_msgbox("Failed to turn off"));
@@ -271,13 +271,40 @@ impl Handler for HandlerTemplate {
         }
         ret
     }
+
+    fn handle_listen_event(
+        &self,
+        _d: &Desc,
+        _local_peer_id: String,
+        _remote_peer_id: &str,
+        event: MsgListenEvent,
+    ) -> HandlerRet {
+        let mut ret = HandlerRet::default();
+        match &event.event as _ {
+            EVENT_ON_CONN_CLIENT => {
+                // Get config if some options should be turned on
+                if let Some(_data) = get_init_data().lock().unwrap().as_ref() {
+                } else {
+                    ret.code = ERR_PLUGIN_MSG_INIT;
+                    ret.msg = "Plugin is not initialized".to_owned();
+                }
+            }
+            EVENT_ON_CONN_CLOSE_SERVER => {
+                // Do some clean
+            }
+            _ => {
+                ret.code = ERR_CALL_INVALID_ARGS;
+                ret.msg = format!("Invalid event {}", event.event);
+            }
+        }
+        ret
+    }
 }
 
 impl HandlerTemplate {
     #[inline]
-    fn make_msg_to_config(id: &str, v: &str) -> String {
+    fn make_msg_to_config(v: &str) -> String {
         MsgToConfig::new_string(
-            id.to_string(),
             CONFIG_TYPE_PEER.to_string(),
             desc::UI_CLIENT_REMOTE_KEY.to_owned(),
             v.to_owned(),

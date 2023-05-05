@@ -145,8 +145,9 @@ mod tests {
         _id: *const c_char,
         _content: *const c_void,
         _len: usize,
-    ) {
+    ) -> *const c_void {
         println!("msg called");
+        std::ptr::null()
     }
 
     #[no_mangle]
@@ -171,6 +172,17 @@ mod tests {
         let msg = unsafe { std::ffi::CStr::from_ptr(msg).to_str().unwrap() };
         println!("{}: {}", level, msg);
     }
+    extern "C" fn native(
+        _method: *const c_char,
+        _json: *const c_char,
+        _raw: *const c_void,
+        _raw_len: usize,
+    ) -> plugin_base::NativeReturnValue {
+        plugin_base::NativeReturnValue {
+            return_type: 0,
+            data: std::ptr::null_mut(),
+        }
+    }
 
     #[test]
     fn test_plugin() {
@@ -191,6 +203,7 @@ mod tests {
                 get_conf,
                 get_id,
                 log: log_cb,
+                // native,
             },
         };
         plugin.init(&init_data, &path).unwrap();

@@ -1,9 +1,9 @@
 use crate::{desc::Desc, errno::*};
 use plugin_common::{
     serde_derive::{Deserialize, Serialize},
-    serde_json,
+    serde_json, ResultType,
 };
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr};
 
 pub const MSG_TO_UI_FLUTTER_CHANNEL_MAIN: u16 = 0x01 << 0;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -16,14 +16,15 @@ pub const MSG_TO_UI_FLUTTER_CHANNEL_FORWARD: u16 = 0x01 << 4;
 
 pub const METHOD_HANDLE_UI: &[u8; 10] = b"handle_ui\0";
 pub const METHOD_HANDLE_PEER: &[u8; 12] = b"handle_peer\0";
-pub const METHOD_HANDLE_CONN: &[u8; 12] = b"handle_conn\0";
-pub const MSG_CONN_ESTABLISHED_CLIENT: &str = "established_client";
-pub const MSG_CONN_ESTABLISHED_SERVER: &str = "established_server";
-pub const MSG_CONN_BEFORE_CLOSE_CLIENT: &str = "before_close_client";
-pub const MSG_CONN_BEFORE_CLOSE_SERVER: &str = "before_close_server";
+pub const METHOD_HANDLE_LISTEN_EVENT: &[u8; 20] = b"handle_listen_event\0";
+pub const EVENT_ON_CONN_CLIENT: &str = "on_conn_client";
+pub const EVENT_ON_CONN_SERVER: &str = "on_conn_server";
+pub const EVENT_ON_CONN_CLOSE_CLIENT: &str = "on_conn_close_client";
+pub const EVENT_ON_CONN_CLOSE_SERVER: &str = "on_conn_close_server";
 pub const MSG_TO_PEER_TARGET: &[u8; 5] = b"peer\0";
 pub const MSG_TO_UI_TARGET: &[u8; 3] = b"ui\0";
 pub const MSG_TO_CONFIG_TARGET: &[u8; 7] = b"config\0";
+pub const MSG_TO_EXT_SUPPORT_TARGET: &[u8; 12] = b"ext-support\0";
 pub const CONFIG_TYPE_SHARED: &str = "shared";
 pub const CONFIG_TYPE_PEER: &str = "peer";
 
@@ -89,7 +90,6 @@ pub struct ConfigToUi {
 
 #[derive(Serialize)]
 pub struct MsgToConfig {
-    pub id: String,
     pub r#type: String,
     pub key: String,
     pub value: String,
@@ -98,9 +98,8 @@ pub struct MsgToConfig {
 }
 
 impl MsgToConfig {
-    fn new(id: String, r#type: String, key: String, value: String, ui: Option<ConfigToUi>) -> Self {
+    fn new(r#type: String, key: String, value: String, ui: Option<ConfigToUi>) -> Self {
         MsgToConfig {
-            id,
             r#type,
             key,
             value,
@@ -109,14 +108,19 @@ impl MsgToConfig {
     }
 
     pub fn new_string(
-        id: String,
         r#type: String,
         key: String,
         value: String,
         ui: Option<ConfigToUi>,
     ) -> String {
-        serde_json::to_string(&MsgToConfig::new(id, r#type, key, value, ui)).unwrap()
+        serde_json::to_string(&MsgToConfig::new(r#type, key, value, ui)).unwrap()
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct MsgToExtSupport {
+    pub r#type: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -124,6 +128,30 @@ pub struct Msgs {
     pub to_ui: Vec<MsgToUi>,
     pub to_config: Vec<String>,
     pub to_peer: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MsgFromUi {
+    pub id: String,
+    pub name: String,
+    pub location: String,
+    pub key: String,
+    pub value: String,
+    pub action: String,
+}
+
+#[derive(Deserialize)]
+pub struct MsgListenEvent {
+    pub event: String,
+}
+
+impl MsgListenEvent {
+    #[inline]
+    pub fn from_cstr(cstr: *const c_char) -> ResultType<Self> {
+        Ok(serde_json::from_str(unsafe {
+            CStr::from_ptr(cstr).to_str()?
+        })?)
+    }
 }
 
 pub struct HandlerRet {
@@ -142,16 +170,6 @@ impl Default for HandlerRet {
     }
 }
 
-#[derive(Deserialize)]
-pub struct MsgFromUi {
-    pub id: String,
-    pub name: String,
-    pub location: String,
-    pub key: String,
-    pub value: String,
-    pub action: String,
-}
-
 static mut PLUGIN_HANDLER: Option<Box<dyn Handler>> = None;
 
 pub trait Handler {
@@ -165,6 +183,13 @@ pub trait Handler {
         out_len: *mut usize,
     ) -> HandlerRet;
     fn handle_server_event(&self, d: &Desc, args: *const c_void, len: usize) -> HandlerRet;
+    fn handle_listen_event(
+        &self,
+        d: &Desc,
+        local_peer_id: String,
+        remote_peer_id: &str,
+        event: MsgListenEvent,
+    ) -> HandlerRet;
 }
 
 pub fn set_handler(handler: Box<dyn Handler>) {

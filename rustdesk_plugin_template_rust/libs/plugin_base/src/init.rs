@@ -2,7 +2,7 @@ use crate::*;
 use std::ffi::{c_char, c_void};
 
 lazy_static! {
-    pub(crate) static ref INIT_DATA: Arc<Mutex<Option<InitData>>> = Default::default();
+    static ref INIT_DATA: Arc<Mutex<Option<InitData>>> = Default::default();
 }
 
 #[repr(C)]
@@ -38,7 +38,15 @@ impl Drop for InitData {
     }
 }
 
-pub fn init(handler: Box<dyn handler::Handler>, desc: desc::Desc, info: *const InitData) -> *const c_void {
+pub fn get_init_data() -> Arc<Mutex<Option<InitData>>> {
+    INIT_DATA.clone()
+}
+
+pub fn init(
+    handler: Box<dyn handler::Handler>,
+    desc: desc::Desc,
+    info: *const InitData,
+) -> *const c_void {
     let ret = set_init_data(info);
     if !ret.is_null() {
         return ret;

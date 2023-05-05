@@ -3,12 +3,16 @@ use crate::{
     desc::{self, get_desc},
     early_return_if_true, early_return_value,
     errno::*,
+    free_c_ptr, get_code_msg_from_ret,
     handler::*,
-    init::INIT_DATA,
+    init::get_init_data,
     make_return_code_msg,
 };
 use plugin_common::{libc, serde_json};
-use std::ffi::{c_char, c_void};
+use std::{
+    ffi::{c_char, c_void},
+    ptr::null,
+};
 
 macro_rules! early_call_return_if_true {
     ($e:expr, $code: ident, $($arg:tt)*) => {
@@ -25,7 +29,7 @@ fn is_method(method: *const c_char, target: &[u8]) -> bool {
 
 fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_void {
     for msg in ret.msgs.to_config.into_iter() {
-        call_msg_cb(
+        let _r = call_msg_cb(
             peer.clone(),
             MSG_TO_CONFIG_TARGET,
             plugin_id.to_owned(),
@@ -34,7 +38,7 @@ fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_vo
     }
 
     for msg in ret.msgs.to_peer.into_iter() {
-        call_msg_cb(
+        let _r = call_msg_cb(
             peer.clone(),
             MSG_TO_PEER_TARGET,
             plugin_id.to_owned(),
@@ -45,7 +49,7 @@ fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_vo
     for msg in ret.msgs.to_ui.into_iter() {
         let mut content = MSG_TO_UI_FLUTTER_CHANNEL_REMOTE.to_le_bytes().to_vec();
         content.extend(serde_json::to_string(&msg).unwrap().as_bytes());
-        call_msg_cb(
+        let _r = call_msg_cb(
             peer.clone(),
             MSG_TO_UI_TARGET,
             plugin_id.to_owned(),
@@ -54,7 +58,7 @@ fn process_return(plugin_id: &str, peer: String, ret: HandlerRet) -> *const c_vo
     }
 
     match ret.code {
-        ERR_SUCCESS => std::ptr::null(),
+        ERR_SUCCESS => null(),
         _ => make_return_code_msg(ret.code, &ret.msg),
     }
 }
@@ -68,7 +72,7 @@ pub fn plugin_call(
     out_len: *mut usize,
 ) -> *const c_void {
     early_call_return_if_true!(
-        INIT_DATA.lock().unwrap().is_none(),
+        get_init_data().lock().unwrap().is_none(),
         ERR_PLUGIN_MSG_INIT,
         "Plugin must be initialized before calling any other functions"
     );
@@ -104,8 +108,8 @@ pub fn plugin_call(
         handle_msg_ui(d, args, len)
     } else if is_method(method, METHOD_HANDLE_PEER) {
         handle_msg_peer(d, args, len, out, out_len)
-    } else if is_method(method, METHOD_HANDLE_CONN) {
-        handle_msg_conn(d, args, len)
+    } else if is_method(method, METHOD_HANDLE_LISTEN_EVENT) {
+        handle_msg_listen(d, &peer, args, len)
     } else {
         HandlerRet {
             code: ERR_CALL_NOT_SUPPORTED_METHOD,
@@ -120,6 +124,36 @@ pub fn plugin_call(
     process_return(&d.id, peer, ret)
 }
 
+enum PeerIdOrRet {
+    PeerId(String),
+    Ret(HandlerRet),
+}
+
+fn get_local_peer_id() -> PeerIdOrRet {
+    if let Some(data) = get_init_data().lock().unwrap().as_ref() {
+        let id_ptr = (data.cbs.get_id)();
+        match cstr_to_string(id_ptr) {
+            Ok(id) => {
+                unsafe {
+                    libc::free(id_ptr as _);
+                }
+                PeerIdOrRet::PeerId(id)
+            }
+            Err(..) => PeerIdOrRet::Ret(HandlerRet {
+                code: ERR_PLUGIN_MSG_GET_LOCAL_PEER_ID,
+                msg: "parse local peer id".to_owned(),
+                msgs: Msgs::default(),
+            }),
+        }
+    } else {
+        PeerIdOrRet::Ret(HandlerRet {
+            code: ERR_PLUGIN_MSG_INIT,
+            msg: "Callbacks must be set before calling any other functions".to_owned(),
+            msgs: Msgs::default(),
+        })
+    }
+}
+
 fn handle_msg_ui(d: &desc::Desc, args: *const c_void, _len: usize) -> HandlerRet {
     let content = early_return_value!(
         cstr_to_string(args as _),
@@ -132,36 +166,30 @@ fn handle_msg_ui(d: &desc::Desc, args: *const c_void, _len: usize) -> HandlerRet
         "parse {}",
         content,
     );
-
     early_return_if_true!(msg_ui.id != d.id, ERR_CALL_INVALID_ARGS, "id mismatch");
-
-    let local_peer_id = if let Some(data) = INIT_DATA.lock().unwrap().as_ref() {
-        let id_ptr = (data.cbs.get_id)();
-        let local_peer_id = early_return_value!(
-            cstr_to_string(id_ptr),
-            ERR_PLUGIN_MSG_GET_LOCAL_PEER_ID,
-            "parse local peer id",
-        );
-        unsafe {
-            libc::free(id_ptr as _);
-        }
-        local_peer_id
-    } else {
-        return HandlerRet {
-            code: ERR_PLUGIN_MSG_INIT,
-            msg: "Callbacks must be set before calling any other functions".to_owned(),
-            msgs: Msgs::default(),
-        };
+    let local_peer_id = match get_local_peer_id() {
+        PeerIdOrRet::PeerId(peer_id) => peer_id,
+        PeerIdOrRet::Ret(ret) => return ret,
     };
     (*get_handler().as_ref().unwrap()).handle_ui_event(d, local_peer_id, msg_ui)
 }
 
-fn handle_msg_conn(_d: &desc::Desc, _args: *const c_void, _len: usize) -> HandlerRet {
-    HandlerRet {
-        code: ERR_CALL_UNIMPLEMENTED,
-        msg: format!("Unimplemented"),
-        msgs: Default::default(),
-    }
+fn handle_msg_listen(
+    d: &desc::Desc,
+    remote_peer_id: &str,
+    args: *const c_void,
+    _len: usize,
+) -> HandlerRet {
+    let event = early_return_value!(
+        MsgListenEvent::from_cstr(args as _),
+        ERR_CALL_INVALID_ARGS,
+        "parse args"
+    );
+    let local_peer_id = match get_local_peer_id() {
+        PeerIdOrRet::PeerId(peer_id) => peer_id,
+        PeerIdOrRet::Ret(ret) => return ret,
+    };
+    (*get_handler().as_ref().unwrap()).handle_listen_event(d, local_peer_id, remote_peer_id, event)
 }
 
 fn handle_msg_peer(
@@ -178,17 +206,31 @@ fn handle_msg_peer(
     }
 }
 
-fn call_msg_cb(mut peer: String, target: &[u8], mut id: String, content: &[u8]) {
-    if let Some(data) = INIT_DATA.lock().unwrap().as_ref() {
+pub fn call_msg_cb(
+    mut peer: String,
+    target: &[u8],
+    mut id: String,
+    content: &[u8],
+) -> (i32, String) {
+    if let Some(data) = get_init_data().lock().unwrap().as_ref() {
         peer.push('\0');
         id.push('\0');
-        (data.cbs.msg)(
+        let ret = (data.cbs.msg)(
             peer.as_ptr() as _,
             target.as_ptr() as _,
             id.as_ptr() as _,
             content.as_ptr() as _,
             content.len() as _,
         );
+        if ret.is_null() {
+            (ERR_SUCCESS, "".to_owned())
+        } else {
+            let res = get_code_msg_from_ret(ret);
+            free_c_ptr(ret as _);
+            res
+        }
+    } else {
+        (ERR_SUCCESS, "".to_owned())
     }
 }
 
@@ -199,7 +241,6 @@ mod tests {
     #[test]
     fn test_event_ui_to_string() {
         let msg = MsgToConfig::new_string(
-            "desc id".to_owned(),
             CONFIG_TYPE_SHARED.to_owned(),
             "msg key".to_owned(),
             desc::CONFIG_VALUE_TRUE.to_owned(),
