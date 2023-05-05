@@ -18,7 +18,7 @@ impl PluginReturn {
 }
 
 #[no_mangle]
-pub fn init() -> PluginReturn {
+pub extern "C" fn init() -> PluginReturn {
     let r = PluginReturn::success();
     println!("REMOVE ME ==================== init return {:?}", &r);
     r
